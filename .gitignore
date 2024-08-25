@@ -5,6 +5,7 @@
 credentials.txt
 config.ini
 config.py
+filter.py
 
 # Cache files
 __pycache__/
