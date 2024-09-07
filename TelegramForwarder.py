@@ -1,6 +1,9 @@
 import time
 import asyncio
+import platform
+import csv
 from telethon.sync import TelegramClient
+from telethon.errors import FloodWaitError, RPCError
 
 class TelegramForwarder:
     def __init__(self, api_id, api_hash, phone_number):
@@ -12,26 +15,24 @@ class TelegramForwarder:
     async def list_chats(self):
         await self.client.connect()
 
-        # Ensure you're authorized
         if not await self.client.is_user_authorized():
             await self.client.send_code_request(self.phone_number)
             await self.client.sign_in(self.phone_number, input('Enter the code: '))
 
-        # Get a list of all the dialogs (chats)
         dialogs = await self.client.get_dialogs()
-        chats_file = open(f"chats_of_{self.phone_number}.txt", "w")
-        # Print information about each chat
-        for dialog in dialogs:
-            print(f"Chat ID: {dialog.id}, Title: {dialog.title}")
-            chats_file.write(f"Chat ID: {dialog.id}, Title: {dialog.title} \n")
-          
 
-        print("List of groups printed successfully!")
+        encoding = 'utf-8' if platform.system() == 'Windows' else None
+
+        with open(f"chats_of_{self.phone_number}.txt", "w", encoding=encoding) as chats_file:
+            for dialog in dialogs:
+                print(f"Chat ID: {dialog.id}, Title: {dialog.title}")
+                chats_file.write(f"Chat ID: {dialog.id}, Title: {dialog.title} \n")
+
+        print("List of chats printed successfully!")
 
     async def forward_messages_to_channel(self, source_chat_id, destination_channel_id, keywords):
         await self.client.connect()
 
-        # Ensure you're authorized
         if not await self.client.is_user_authorized():
             await self.client.send_code_request(self.phone_number)
             await self.client.sign_in(self.phone_number, input('Enter the code: '))
@@ -40,32 +41,57 @@ class TelegramForwarder:
 
         while True:
             print("Checking for messages and forwarding them...")
-            # Get new messages since the last checked message
             messages = await self.client.get_messages(source_chat_id, min_id=last_message_id, limit=None)
 
             for message in reversed(messages):
-                # Check if the message text includes any of the keywords
                 if keywords:
                     if message.text and any(keyword in message.text.lower() for keyword in keywords):
                         print(f"Message contains a keyword: {message.text}")
-
-                        # Forward the message to the destination channel
                         await self.client.send_message(destination_channel_id, message.text)
-
                         print("Message forwarded")
                 else:
-                        # Forward the message to the destination channel
-                        await self.client.send_message(destination_channel_id, message.text)
+                    await self.client.send_message(destination_channel_id, message.text)
+                    print("Message forwarded")
 
-                        print("Message forwarded")
-
-
-                # Update the last message ID
                 last_message_id = max(last_message_id, message.id)
 
-            # Add a delay before checking for new messages again
             await asyncio.sleep(5)  # Adjust the delay time as needed
 
+    async def download_messages_to_csv(self, chat_id):
+        await self.client.connect()
+
+        if not await self.client.is_user_authorized():
+            await self.client.send_code_request(self.phone_number)
+            await self.client.sign_in(self.phone_number, input('Enter the code: '))
+
+        encoding = 'utf-8' if platform.system() == 'Windows' else None
+
+        try:
+            dialogs = await self.client.get_dialogs()
+
+            entity = None
+            for dialog in dialogs:
+                if str(dialog.id) == str(chat_id) or dialog.name == chat_id:
+                    entity = dialog.entity
+                    break
+
+            if not entity:
+                print(f"Error: Could not find chat with ID or username '{chat_id}'.")
+                return
+
+            with open(f"messages_from_{chat_id}.csv", mode='w', newline='', encoding=encoding) as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow(["Date", "Sender ID", "Message Text"])
+
+                async for message in self.client.iter_messages(entity):
+                    writer.writerow([message.date, message.sender_id, message.text])
+
+            print("Messages downloaded successfully!")
+
+        except RPCError as e:
+            print(f"RPC Error: {e}")
+        except ValueError as e:
+            print(f"Error: {e}. Check if the chat ID is correct and accessible.")
 
 # Function to read credentials from file
 def read_credentials():
@@ -88,37 +114,35 @@ def write_credentials(api_id, api_hash, phone_number):
         file.write(phone_number + "\n")
 
 async def main():
-    # Attempt to read credentials from file
     api_id, api_hash, phone_number = read_credentials()
 
-    # If credentials not found in file, prompt the user to input them
     if api_id is None or api_hash is None or phone_number is None:
         api_id = input("Enter your API ID: ")
         api_hash = input("Enter your API Hash: ")
         phone_number = input("Enter your phone number: ")
-        # Write credentials to file for future use
         write_credentials(api_id, api_hash, phone_number)
 
     forwarder = TelegramForwarder(api_id, api_hash, phone_number)
     
     print("Choose an option:")
     print("1. List Chats")
-    print("2. Forward Messages")
+    print("2. Forward Messages to a Destination Chat")
+    print("3. Download All Messages from a Chat to CSV")
     
     choice = input("Enter your choice: ")
     
     if choice == "1":
         await forwarder.list_chats()
     elif choice == "2":
-        source_chat_id = int(input("Enter the source chat ID: "))
-        destination_channel_id = int(input("Enter the destination chat ID: "))
-        print("Enter keywords if you want to forward messages with specific keywords, or leave blank to forward every message!")
+        source_chat_id = input("Enter the source chat ID or username (for forwarding): ")
+        destination_channel_id = input("Enter the destination chat ID or username (for forwarding): ")
         keywords = input("Put keywords (comma separated if multiple, or leave blank): ").split(",")
-        
         await forwarder.forward_messages_to_channel(source_chat_id, destination_channel_id, keywords)
+    elif choice == "3":
+        chat_id = input("Enter the chat ID or username from which you want to download all messages to CSV: ")
+        await forwarder.download_messages_to_csv(chat_id)
     else:
         print("Invalid choice")
 
-# Start the event loop and run the main function
 if __name__ == "__main__":
     asyncio.run(main())
